@@ -37,7 +37,6 @@ bool blinkState = false;
 
 // MPU control/status vars
 bool dmpReady = false;  // set true if DMP init was successful
-uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
 uint8_t devStatus;      // return status after each device operation (0 = success, !0 = error)
 uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
 uint16_t fifoCount;     // count of all bytes currently in FIFO
@@ -82,8 +81,7 @@ void setup() {
   // initialize device
   Serial1.println(F("Initializing I2C devices..."));
   mpu.initialize();
- // pinMode(INTERRUPT_PIN, INPUT);
-
+ 
   // verify connection
   Serial1.println(F("Testing device connections..."));
   Serial1.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
@@ -113,10 +111,7 @@ void setup() {
     Serial1.println(F("Enabling DMP..."));
     mpu.setDMPEnabled(true);
 
-    mpuIntStatus = mpu.getIntStatus();
-
     // set our DMP Ready flag so the main loop() function knows it's okay to use it
-    Serial1.println(F("DMP ready! Waiting for first interrupt..."));
     dmpReady = true;
 
     // get expected DMP packet size for later comparison
@@ -145,21 +140,17 @@ void loop() {
   // if programming failed, don't try to do anything
   if (!dmpReady) return;
 
-  
-
-  mpuIntStatus = mpu.getIntStatus();
-
   // get current FIFO count
   fifoCount = mpu.getFIFOCount();
 
   // check for overflow (this should never happen unless our code is too inefficient)
-  if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
+  if ( fifoCount == 1024) {
     // reset so we can continue cleanly
     mpu.resetFIFO();
     Serial1.println(F("FIFO overflow!"));
 
-    // otherwise, check for DMP data ready interrupt (this should happen frequently)
-  } else if (mpuIntStatus & 0x02) {
+    // otherwise we are good to go
+  } else {
     // wait for correct available data length, should be a VERY short wait
     while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
 
