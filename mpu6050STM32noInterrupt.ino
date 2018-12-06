@@ -7,7 +7,8 @@
  * You will need to install the MPU6050 library. 
  * The gyroscope/ accelerometer board I am using is GY-521 but any other MPU6050 based board should do
  * I am also using a bluetooth module to comunicate with an Android device such as a phone or a tablet
- * 
+ * This version does not use an interrupt and can be calibrated by sending the c; command
+ * I am using Serial1 with the STM32 board but you can use any other serial port
  */
 
 #include "I2Cdev.h"
@@ -28,8 +29,7 @@ MPU6050 mpu;
 
 /* =========================================================================
    NOTE: In addition to connection 3.3v, GND, SDA, and SCL, this sketch
-   does not depends on the MPU-6050's INT pin being connected to the Arduino's
-   external interrupt #0 pin. 
+   does not depends on the MPU-6050's INT pin 
    ========================================================================= */
 
 #define LED_PIN PC13 // (Arduino is 13, Teensy is 11, Teensy++ is 6)
@@ -51,7 +51,16 @@ VectorFloat gravity;    // [x, y, z]            gravity vector
 float euler[3];         // [psi, theta, phi]    Euler angle container
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
 
+//calibration stuff
+//Change those 3 variables if you want to fine tune the skecth to your needs.
+int buffersize = 200;   //Amount of readings used to average, make it higher to get more precision but sketch will be slower  (default:1000)
+int acel_deadzone = 8;   //Acelerometer error allowed, make it lower to get more precision, but sketch may not converge  (default:8)
+int giro_deadzone = 1;   //Giro error allowed, make it lower to get more precision, but sketch may not converge  (default:1)
 
+int16_t ax, ay, az, gx, gy, gz;
+
+int mean_ax, mean_ay, mean_az, mean_gx, mean_gy, mean_gz, state = 0;
+int ax_offset, ay_offset, az_offset, gx_offset, gy_offset, gz_offset;
 
 // ================================================================
 // ===                      INITIAL SETUP                       ===
@@ -97,14 +106,14 @@ void setup() {
   devStatus = mpu.dmpInitialize();
 
   // supply your own gyro offsets here, scaled for min sensitivity
- 
+  // you can recalibrate it later
   mpu.setXAccelOffset(1094);
   mpu.setYAccelOffset(328);
   mpu.setZAccelOffset(1272);
   mpu.setXGyroOffset(54);
   mpu.setYGyroOffset(0);
   mpu.setZGyroOffset(-25);
-
+ 
   // make sure it worked (returns 0 if so)
   if (devStatus == 0) {
     // turn on the DMP, now that it's ready
@@ -135,8 +144,12 @@ void setup() {
 // ================================================================
 // ===                    MAIN PROGRAM LOOP                     ===
 // ================================================================
+void loop(void)
+{
+  MainMenu();
+}
+void myloop() {
 
-void loop() {
   // if programming failed, don't try to do anything
   if (!dmpReady) return;
 
@@ -158,10 +171,7 @@ void loop() {
     mpu.getFIFOBytes(fifoBuffer, packetSize);
 
     // track FIFO count here in case there is > 1 packet available
-    // (this lets us immediately read more without waiting for an interrupt)
     fifoCount -= packetSize;
-
-
 
     float q1[4];
     mpu.dmpGetQuaternion(&q, fifoBuffer);
@@ -178,6 +188,10 @@ void loop() {
     digitalWrite(LED_PIN, blinkState);
   }
 }
+
+// ================================================================
+// === Those 2 functions will format the data                   ===
+// ================================================================
 void serialPrintFloatArr(float * arr, int length) {
   for (int i = 0; i < length; i++) {
     serialFloatPrint(arr[i]);
@@ -198,5 +212,213 @@ void serialFloatPrint(float f) {
 
     Serial1.print(c1);
     Serial1.print(c2);
+  }
+}
+
+
+
+
+/*
+
+   calibration routines those will be executed each time the board is powered up.
+   we might want to calibrate it for good on a flat table and save it to the microcontroler eeprom 
+
+*/
+void calibrate() {
+  // start message
+  Serial1.println("\nMPU6050 Calibration Sketch");
+  Serial1.println("\nYour MPU6050 should be placed in horizontal position, with package letters facing up. \nDon't touch it until you see a finish message.\n");
+
+  // verify connection
+  Serial1.println(mpu.testConnection() ? "MPU6050 connection successful" : "MPU6050 connection failed");
+
+  // reset offsets
+  mpu.setXAccelOffset(0);
+  mpu.setYAccelOffset(0);
+  mpu.setZAccelOffset(0);
+  mpu.setXGyroOffset(0);
+  mpu.setYGyroOffset(0);
+  mpu.setZGyroOffset(0);
+
+  while (1) {
+    if (state == 0) {
+      Serial1.println("\nReading sensors for first time...");
+      meansensors();
+      state++;
+      delay(100);
+    }
+
+    if (state == 1) {
+      Serial1.println("\nCalculating offsets...");
+      calibration();
+      state++;
+      delay(100);
+    }
+
+    if (state == 2) {
+      meansensors();
+      Serial1.println("\nFINISHED!");
+      Serial1.print("\nSensor readings with offsets:\t");
+      Serial1.print(mean_ax);
+      Serial1.print("\t");
+      Serial1.print(mean_ay);
+      Serial1.print("\t");
+      Serial1.print(mean_az);
+      Serial1.print("\t");
+      Serial1.print(mean_gx);
+      Serial1.print("\t");
+      Serial1.print(mean_gy);
+      Serial1.print("\t");
+      Serial1.println(mean_gz);
+      Serial1.print("Your offsets:\t");
+      Serial1.print(ax_offset);
+      Serial1.print("\t");
+      Serial1.print(ay_offset);
+      Serial1.print("\t");
+      Serial1.print(az_offset);
+      Serial1.print("\t");
+      Serial1.print(gx_offset);
+      Serial1.print("\t");
+      Serial1.print(gy_offset);
+      Serial1.print("\t");
+      Serial1.println(gz_offset);
+      Serial1.println("\nData is printed as: acelX acelY acelZ giroX giroY giroZ");
+      Serial1.println("Check that your sensor readings are close to 0 0 16384 0 0 0");
+      Serial1.println("If calibration was succesful write down your offsets so you can set them in your projects using something similar to mpu.setXAccelOffset(youroffset)");
+      break;
+    }
+  }
+}
+
+
+void meansensors() {
+  long i = 0, buff_ax = 0, buff_ay = 0, buff_az = 0, buff_gx = 0, buff_gy = 0, buff_gz = 0;
+
+  while (i < (buffersize + 101)) {
+    // read raw accel/gyro measurements from device
+    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+    if (i > 100 && i <= (buffersize + 100)) { //First 100 measures are discarded
+      buff_ax = buff_ax + ax;
+      buff_ay = buff_ay + ay;
+      buff_az = buff_az + az;
+      buff_gx = buff_gx + gx;
+      buff_gy = buff_gy + gy;
+      buff_gz = buff_gz + gz;
+    }
+    if (i == (buffersize + 100)) {
+      mean_ax = buff_ax / buffersize;
+      mean_ay = buff_ay / buffersize;
+      mean_az = buff_az / buffersize;
+      mean_gx = buff_gx / buffersize;
+      mean_gy = buff_gy / buffersize;
+      mean_gz = buff_gz / buffersize;
+    }
+    i++;
+    delay(2); //Needed so we don't get repeated measures
+  }
+}
+
+void calibration() {
+  ax_offset = -mean_ax / 8;
+  ay_offset = -mean_ay / 8;
+  az_offset = (16384 - mean_az) / 8;
+
+  gx_offset = -mean_gx / 4;
+  gy_offset = -mean_gy / 4;
+  gz_offset = -mean_gz / 4;
+  while (1) {
+    int ready = 0;
+    mpu.setXAccelOffset(ax_offset);
+    mpu.setYAccelOffset(ay_offset);
+    mpu.setZAccelOffset(az_offset);
+
+    mpu.setXGyroOffset(gx_offset);
+    mpu.setYGyroOffset(gy_offset);
+    mpu.setZGyroOffset(gz_offset);
+
+    meansensors();
+    //Serial1.println("...");
+    blinkState = !blinkState;
+    digitalWrite(LED_PIN, blinkState);
+    if (abs(mean_ax) <= acel_deadzone) ready++;
+    else ax_offset = ax_offset - mean_ax / acel_deadzone;
+
+    if (abs(mean_ay) <= acel_deadzone) ready++;
+    else ay_offset = ay_offset - mean_ay / acel_deadzone;
+
+    if (abs(16384 - mean_az) <= acel_deadzone) ready++;
+    else az_offset = az_offset + (16384 - mean_az) / acel_deadzone;
+
+    if (abs(mean_gx) <= giro_deadzone) ready++;
+    else gx_offset = gx_offset - mean_gx / (giro_deadzone + 1);
+
+    if (abs(mean_gy) <= giro_deadzone) ready++;
+    else gy_offset = gy_offset - mean_gy / (giro_deadzone + 1);
+
+    if (abs(mean_gz) <= giro_deadzone) ready++;
+    else gz_offset = gz_offset - mean_gz / (giro_deadzone + 1);
+
+    if (ready == 6) break;
+  }
+}
+
+
+//================================================================
+// Main menu to interpret all the commands sent by the altimeter console
+//================================================================
+void MainMenu()
+{
+  char readVal = ' ';
+  int i = 0;
+
+  char commandbuffer[200];
+
+  
+
+    while (Serial1.available())
+    {
+      readVal = Serial1.read();
+      if (readVal != ';' )
+      {
+        if (readVal != '\n')
+          commandbuffer[i++] = readVal;
+      }
+      else
+      {
+        commandbuffer[i++] = '\0';
+        break;
+      }
+    }
+  
+  if (commandbuffer[0]!='\0'){
+    interpretCommandBuffer(commandbuffer);
+    commandbuffer[0]='\0';
+  }
+  myloop();
+}
+
+void interpretCommandBuffer(char *commandbuffer) {
+  //Serial1.println((char*)commandbuffer);
+  //this will erase all flight
+  if (commandbuffer[0] == 'c')
+  {
+    Serial1.println(F("calibration\n"));
+    // Do calibration suff
+   state=0;
+  
+   calibrate();
+   mpu.setXAccelOffset(ax_offset);
+  mpu.setYAccelOffset(ay_offset);
+  mpu.setZAccelOffset(az_offset);
+  mpu.setXGyroOffset(gx_offset);
+  mpu.setYGyroOffset(gy_offset);
+  mpu.setZGyroOffset(gz_offset);
+  
+  }
+  else
+  {
+    Serial1.println(F("Unknown command" ));
+    Serial1.println(commandbuffer[0]);
   }
 }
