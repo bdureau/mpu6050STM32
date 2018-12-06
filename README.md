@@ -4,3 +4,7 @@ I have made 2 versions. One is using the interrupt pin and the other one isn't.
 To display the rocket on your Android phone use my other app.
 
 [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/qz4jsMyJYC4/0.jpg)](https://www.youtube.com/watch?v=qz4jsMyJYC4)
+
+You will need to go to my Arduino lib repository, download evrything and install the libs you do not have already
+
+https://github.com/bdureau/AltimetersLibs
